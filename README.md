@@ -1,11 +1,13 @@
-# tcp-chat
+# TCP Chat Server
 
-TCP chat server and client.
-
-Zero dependencies. Python 3.8+.
+TCP Chat Server — zero-dependency, single-file Python CLI.
 
 ## Usage
 
 ```bash
 python3 tcp_chat.py --help
 ```
+
+## License
+
+MIT

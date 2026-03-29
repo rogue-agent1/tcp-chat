@@ -1,63 +1,80 @@
 #!/usr/bin/env python3
-"""tcp_chat - TCP chat server and client."""
-import argparse, socket, threading, sys
+"""Multi-client TCP chat server and client."""
+import sys, socket, threading, time
 
-def server(host, port):
-    clients = []; lock = threading.Lock()
-    def broadcast(msg, sender=None):
-        with lock:
-            for c in clients:
-                if c != sender:
-                    try: c.sendall(msg)
-                    except: pass
-    def handle(conn, addr):
-        name = conn.recv(1024).decode().strip()
-        broadcast(f"[{name} joined]\n".encode())
-        print(f"{name} connected from {addr}")
-        with lock: clients.append(conn)
+class ChatServer:
+    def __init__(self, host="127.0.0.1", port=9090):
+        self.host = host; self.port = port; self.clients = {}; self.lock = threading.Lock()
+
+    def broadcast(self, msg, exclude=None):
+        with self.lock:
+            for name, conn in list(self.clients.items()):
+                if name != exclude:
+                    try: conn.sendall(msg.encode())
+                    except: del self.clients[name]
+
+    def handle(self, conn, addr):
         try:
+            conn.sendall(b"Enter your name: ")
+            name = conn.recv(1024).decode().strip()
+            with self.lock: self.clients[name] = conn
+            self.broadcast(f"[{name} joined]\n", name)
+            print(f"{name} connected from {addr}")
             while True:
                 data = conn.recv(4096)
                 if not data: break
-                broadcast(f"{name}: {data.decode()}".encode(), conn)
+                msg = data.decode().strip()
+                if msg == "/quit": break
+                if msg == "/who":
+                    with self.lock: conn.sendall(f"Online: {', '.join(self.clients.keys())}\n".encode())
+                elif msg.startswith("/msg "):
+                    parts = msg.split(" ", 2)
+                    if len(parts) == 3:
+                        target = parts[1]
+                        with self.lock:
+                            if target in self.clients:
+                                self.clients[target].sendall(f"[DM from {name}] {parts[2]}\n".encode())
+                else: self.broadcast(f"{name}: {msg}\n", name)
         except: pass
-        with lock: clients.remove(conn)
-        broadcast(f"[{name} left]\n".encode())
-        conn.close()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind((host, port)); sock.listen(5)
-    print(f"Chat server on {host}:{port}")
-    try:
-        while True:
-            conn, addr = sock.accept()
-            threading.Thread(target=handle, args=(conn, addr), daemon=True).start()
-    except KeyboardInterrupt: sock.close()
+        finally:
+            with self.lock: self.clients.pop(name, None)
+            self.broadcast(f"[{name} left]\n"); conn.close()
 
-def client(host, port, name):
+    def run(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((self.host, self.port)); sock.listen(10)
+        print(f"Chat server on {self.host}:{self.port}")
+        try:
+            while True:
+                conn, addr = sock.accept()
+                threading.Thread(target=self.handle, args=(conn, addr), daemon=True).start()
+        except KeyboardInterrupt: print("\nServer stopped"); sock.close()
+
+def client(host="127.0.0.1", port=9090):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.connect((host, port)); sock.sendall(f"{name}\n".encode())
+    sock.connect((host, port))
     def recv():
         while True:
-            data = sock.recv(4096)
-            if not data: break
-            sys.stdout.write(data.decode()); sys.stdout.flush()
+            try:
+                data = sock.recv(4096)
+                if not data: break
+                print(data.decode(), end="", flush=True)
+            except: break
     threading.Thread(target=recv, daemon=True).start()
     try:
         while True:
             msg = input()
+            if msg == "/quit": sock.sendall(b"/quit"); break
             sock.sendall(f"{msg}\n".encode())
-    except (KeyboardInterrupt, EOFError): sock.close()
+    except (KeyboardInterrupt, EOFError): pass
+    finally: sock.close()
 
 def main():
-    p = argparse.ArgumentParser(description="TCP chat")
-    sub = p.add_subparsers(dest="cmd")
-    s = sub.add_parser("server"); s.add_argument("-H", "--host", default="0.0.0.0"); s.add_argument("-p", "--port", type=int, default=9999)
-    c = sub.add_parser("client"); c.add_argument("-H", "--host", default="localhost"); c.add_argument("-p", "--port", type=int, default=9999)
-    c.add_argument("-n", "--name", default="anon")
-    args = p.parse_args()
-    if args.cmd == "server": server(args.host, args.port)
-    elif args.cmd == "client": client(args.host, args.port, args.name)
+    if len(sys.argv) < 2: print("Usage: tcp_chat.py server|client [host] [port]"); return
+    mode = sys.argv[1]; host = sys.argv[2] if len(sys.argv) > 2 else "127.0.0.1"
+    port = int(sys.argv[3]) if len(sys.argv) > 3 else 9090
+    if mode == "server": ChatServer(host, port).run()
+    elif mode == "client": client(host, port)
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
